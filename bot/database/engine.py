@@ -38,8 +38,6 @@ def _normalize_postgres_url(database_url: str) -> tuple[str, dict[str, Any]]:
 
     connect_args: dict[str, Any] = {}
     if raw.startswith("postgresql+asyncpg://"):
-        connect_args["statement_cache_size"] = 0
-
         parsed = urlsplit(raw)
         if parsed.query:
             remaining_params: list[tuple[str, str]] = []
@@ -51,8 +49,8 @@ def _normalize_postgres_url(database_url: str) -> tuple[str, dict[str, Any]]:
                         connect_args["ssl"] = False
                     elif lower_val in _ASYNCPG_VALID_SSL_MODES:
                         connect_args["ssl"] = lower_val
-                elif lower_key == "channel_binding":
-                    # Not supported as a keyword argument by asyncpg.connect()
+                elif lower_key in {"channel_binding", "pgbouncer"}:
+                    # Not supported as keyword arguments by asyncpg.connect()
                     continue
                 else:
                     remaining_params.append((key, value))
@@ -71,13 +69,21 @@ def _normalize_postgres_url(database_url: str) -> tuple[str, dict[str, Any]]:
 
 
 def create_db_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:
-    """Create async SQLAlchemy engine configured for Serverless (NullPool + asyncpg)."""
-    normalized_url, connect_args = _normalize_postgres_url(database_url)
+    """Create async SQLAlchemy engine configured for Serverless (NullPool + asyncpg).
+
+    Disables both asyncpg and SQLAlchemy prepared statement caches for full
+    compatibility with Supabase Transaction Pooler (port 6543 / PgBouncer).
+    """
+    normalized_url, url_connect_args = _normalize_postgres_url(database_url)
     return create_async_engine(
         normalized_url,
         echo=echo,
         poolclass=NullPool,
-        connect_args=connect_args,
+        connect_args={
+            "statement_cache_size": 0,
+            "prepared_statement_cache_size": 0,
+            **url_connect_args,
+        },
     )
 
 
